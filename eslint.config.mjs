@@ -1,12 +1,16 @@
+// eslint.config.mjs
+
 import globals from 'globals';
 import pluginJs from '@eslint/js';
 
 export default [
+  { files: ['**/*.js'], languageOptions: { sourceType: 'commonjs' } },
   {
-    files: ['**/*.js'],
     languageOptions: {
-      sourceType: 'commonjs',
-      globals: globals.node,
+      globals: {
+        ...globals.node,
+        ...globals.jest,
+      },
     },
   },
   pluginJs.configs.recommended,

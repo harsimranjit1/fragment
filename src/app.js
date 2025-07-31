@@ -12,7 +12,7 @@ const pino = require('pino-http')({
   logger,
 });
 
-// Load our authentication strategy
+// Load our authentication strategies (Basic Auth for test, Cognito for others)
 const auth = require('./auth');
 
 // Create an express app instance we can use to attach middleware and HTTP routes
@@ -30,14 +30,14 @@ app.use(cors());
 // Use gzip/deflate compression middleware
 app.use(compression());
 
-// Set up our passport authentication middleware
+// ✅ Setup our passport authentication middleware
 passport.use(auth.strategy());
 app.use(passport.initialize());
 
-// Define our routes
+// ✅ Define our routes
 app.use('/', require('./routes'));
 
-// Add 404 middleware to handle any requests for resources that can't be found
+// ✅ 404 middleware to handle any requests for resources that can't be found
 app.use((req, res) => {
   res.status(404).json({
     status: 'error',
@@ -48,7 +48,7 @@ app.use((req, res) => {
   });
 });
 
-// Add error-handling middleware to deal with anything else
+// ✅ Error-handling middleware to deal with anything else
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
   // We may already have an error response we can use, but if not,
