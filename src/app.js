@@ -17,6 +17,7 @@ const auth = require('./auth');
 
 // Create an express app instance we can use to attach middleware and HTTP routes
 const app = express();
+const { createErrorResponse } = require('./response');
 
 // Use pino logging middleware
 app.use(pino);
@@ -60,14 +61,7 @@ app.use((err, req, res, next) => {
   if (status > 499) {
     logger.error({ err }, 'Error processing request');
   }
-
-  res.status(status).json({
-    status: 'error',
-    error: {
-      message,
-      code: status,
-    },
-  });
+  res.status(status).json(createErrorResponse(status, message));
 });
 
 // Export our `app` so we can access it in server.js
