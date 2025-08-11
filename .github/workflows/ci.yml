@@ -27,7 +27,6 @@ jobs:
       - uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: Dockerfile
-
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest
