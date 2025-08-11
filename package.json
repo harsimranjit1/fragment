@@ -5,7 +5,7 @@
   "description": "Fragments back-end API",
   "scripts": {
     "test:watch": "jest -c jest.config.js --runInBand --watch --",
-    "test": "jest -c jest.config.js --runInBand --",
+    "test": "jest -c jest.config.js --runInBand",
     "coverage": "jest -c jest.config.js --runInBand --coverage",
     "lint": "eslint \"./src/**/*.js\"",
     "start": "node src/index.js",
@@ -39,6 +39,7 @@
     "helmet": "^8.1.0",
     "http-auth": "^4.2.1",
     "http-auth-passport": "^1.0.7",
+    "markdown-it": "^14.1.0",
     "passport": "^0.7.0",
     "passport-http": "^0.3.0",
     "passport-http-bearer": "^1.0.1",
