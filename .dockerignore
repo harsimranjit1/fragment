@@ -10,3 +10,5 @@ eslint.config.mjs
 .gitignore
 .prettier*
 jest*
+.DS_Store
+npm-debug.log
