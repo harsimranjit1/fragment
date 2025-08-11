@@ -1,68 +1,51 @@
 // src/app.js
-
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const compression = require('compression');
 const passport = require('passport');
-
 const logger = require('./logger');
-const pino = require('pino-http')({
-  // Use our default logger instance, which is already configured
-  logger,
-});
-
-// Load our authentication strategies (Basic Auth for test, Cognito for others)
-const auth = require('./auth');
-
-// Create an express app instance we can use to attach middleware and HTTP routes
-const app = express();
+const pino = require('pino-http')({ logger });
 const { createErrorResponse } = require('./response');
 
-// Use pino logging middleware
+const app = express();
+
+// Parsers
+app.use(express.json()); // JSON API payloads
+app.use(express.text({ type: ['text/*'] })); // raw text fragments only
+
+// Logging / security / utils
 app.use(pino);
-
-// Use helmetjs security middleware
 app.use(helmet());
-
-// Use CORS middleware so we can make requests across origins
 app.use(cors());
-
-// Use gzip/deflate compression middleware
 app.use(compression());
 
-// ✅ Setup our passport authentication middleware
-passport.use(auth.strategy());
+// Passport (strategy set in auth-middleware at request time)
 app.use(passport.initialize());
 
-// ✅ Define our routes
+// Routes
 app.use('/', require('./routes'));
 
-// ✅ 404 middleware to handle any requests for resources that can't be found
+// 404 (numeric code only)
 app.use((req, res) => {
-  res.status(404).json({
-    status: 'error',
-    error: {
-      message: 'not found',
-      code: 404,
-    },
-  });
+  res.status(404).json(createErrorResponse(404, 'not found'));
 });
 
-// ✅ Error-handling middleware to deal with anything else
-// eslint-disable-next-line no-unused-vars
-app.use((err, req, res, next) => {
-  // We may already have an error response we can use, but if not,
-  // use a generic `500` server error and message.
-  const status = err.status || 500;
-  const message = err.message || 'unable to process request';
+// Error handler (MUST be last and have 4 params)
+app.use((err, req, res) => {
+  // Prefer numeric fields; ignore strings like 'error'
+  const pickNumeric = (...vals) => {
+    for (const v of vals) {
+      const n = Number(v);
+      if (Number.isInteger(n) && n >= 100 && n <= 599) return n;
+    }
+    return 500;
+  };
 
-  // If this is a server error, log something so we can see what's going on.
-  if (status > 499) {
-    logger.error({ err }, 'Error processing request');
-  }
-  res.status(status).json(createErrorResponse(status, message));
+  const code = pickNumeric(err?.statusCode, err?.error?.code, err?.status, 500);
+  const message = err?.message ?? err?.error?.message ?? 'Internal Server Error';
+
+  res.status(code).json(createErrorResponse(code, message));
 });
 
-// Export our `app` so we can access it in server.js
 module.exports = app;
