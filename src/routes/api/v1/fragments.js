@@ -93,7 +93,7 @@ router.get('/:id/info', authenticate(), async (req, res) => {
     const meta = fragment.toJSON ? fragment.toJSON() : fragment;
     res.status(200).json(createSuccessResponse({ fragment: meta }));
   } catch (err) {
-    res.status(404).json(createErrorResponse(404, 'Fragment not found'));
+    res.status(404).json(createErrorResponse(404, 'Fragment not found', err));
   }
 });
 
