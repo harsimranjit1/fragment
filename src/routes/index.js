@@ -1,22 +1,24 @@
-// src/routes/index.js
 const express = require('express');
-const { version, author } = require('../../package.json');
 const authenticate = require('../auth/auth-middleware');
 const { createSuccessResponse } = require('../response');
+const { hostname } = require('os');
 
 const router = express.Router();
 
-// 👇 protect everything under /v1
-router.use('/v1', authenticate(), require('./api/v1'));
+// Protect everything under /v1 and mount ONE router
+router.use('/v1', authenticate(), require('./api'));
 
-// health check
+// Health check
 router.get('/', (req, res) => {
   res.setHeader('Cache-Control', 'no-cache');
   res.status(200).json(
     createSuccessResponse({
-      author,
+      // TODO: make sure these are changed for your name and repo
+      author: 'HARSIMRANJIT KAUR',
       githubUrl: 'https://github.com/harsimranjit1/fragment',
-      version,
+
+      // Include the hostname in the response
+      hostname: hostname(),
     })
   );
 });

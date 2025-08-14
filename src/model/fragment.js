@@ -1,120 +1,291 @@
-const { randomUUID } = require('crypto');
+// src/model/fragment.js
+
+const crypto = require('crypto');
+const data = require('./data');
 const contentType = require('content-type');
 
-// Import database helper functions
-const {
-  readFragment,
-  writeFragment,
-  readFragmentData,
-  writeFragmentData,
-  listFragments,
-  deleteFragment,
-} = require('./data/memory');
+// Hash helper (SHA-256 -> hex) lives at src/hash.js
+// Adjust the path if your project places it elsewhere.
+const hash = require('../hash');
+
+// ---------------------- Supported types & helpers ----------------------------
+
+function normalizeType(value) {
+  return String(value || '')
+    .split(';')[0]
+    .trim()
+    .toLowerCase();
+}
+
+function isText(type) {
+  return type.startsWith('text/');
+}
+
+// ------------------------------- Fragment -----------------------------------
 
 class Fragment {
-  constructor({ id, ownerId, created, updated, type, size = 0 }) {
-    // Validate required fields
+  /**
+   * @param {Object} params
+   * @param {string} params.ownerId  // email or user identifier (will be hashed)
+   * @param {string} params.type
+   * @param {string} [params.id]
+   * @param {Date|string} [params.created]
+   * @param {Date|string} [params.updated]
+   * @param {number} [params.size=0]
+   */
+  constructor({ ownerId, type, id, created, updated, size = 0 }) {
     if (!ownerId) throw new Error('ownerId is required');
-    if (!type) throw new Error('type is required');
-    if (!Fragment.isSupportedType(type)) throw new Error(`Unsupported type: ${type}`);
-    if (typeof size !== 'number' || size < 0) throw new Error('Size must be a non-negative number');
 
-    this.id = id || randomUUID();
-    this.ownerId = ownerId;
-    this.created = created || new Date().toISOString();
-    this.updated = updated || new Date().toISOString();
-    this.type = type;
+    const norm = normalizeType(type);
+    if (!Fragment.isSupportedType(norm)) {
+      throw new Error(`Unsupported type: ${type}`);
+    }
+
+    // 🔐 Always store the hashed ownerId (privacy + matches lab expectations)
+    this.ownerId = Fragment.ownerId(ownerId);
+
+    this._type = norm;
+    this.id = id || Fragment.id();
+    this.created = created ? new Date(created) : new Date();
+    this.updated = updated ? new Date(updated) : new Date();
+
+    if (typeof size !== 'number' || size < 0) {
+      throw new Error('size must be a non-negative number');
+    }
     this.size = size;
   }
 
-  /**
-   * Get all fragments for a user
-   */
-  static async byUser(ownerId, expand = false) {
-    const fragments = await listFragments(ownerId);
-    if (!fragments || fragments.length === 0) return [];
-
-    if (expand) {
-      return Promise.all(fragments.map((f) => this.byId(ownerId, f)));
-    }
-    return fragments;
+  // Deterministic hash for owner identifiers (e.g., emails)
+  static ownerId(value) {
+    const v = String(value || '');
+    // If it's already a 64-char hex (sha256), use as-is to avoid double-hashing
+    if (/^[0-9a-fA-F]{64}$/.test(v)) return v;
+    return hash(v);
   }
 
-  /**
-   * Get a fragment by user and id
-   */
-  static async byId(ownerId, id) {
-    const data = await readFragment(ownerId, id);
-    if (!data) throw new Error(`Fragment ${id} not found`);
-    return new Fragment(data);
+  static id() {
+    return crypto.randomUUID();
   }
 
-  /**
-   * Delete fragment metadata and data
-   */
-  static async delete(ownerId, id) {
-    await deleteFragment(ownerId, id);
-  }
-
-  /**
-   * Save metadata
-   */
-  async save() {
-    this.updated = new Date().toISOString();
-    await writeFragment(this);
-  }
-
-  /**
-   * Get data
-   */
-  async getData() {
-    const data = await readFragmentData(this.ownerId, this.id);
-    return data;
-  }
-
-  /**
-   * Set data and update size and timestamp
-   */
-  async setData(data) {
-    if (!Buffer.isBuffer(data)) throw new Error('Data must be a Buffer');
-    await writeFragmentData(this.ownerId, this.id, data);
-    this.size = data.length;
-    this.updated = new Date().toISOString();
-    await this.save();
-  }
-
-  /**
-   * Return mime type only
-   */
-  get mimeType() {
-    const { type } = contentType.parse(this.type);
-    return type;
-  }
-
-  /**
-   * Return true if text/*
-   */
-  get isText() {
-    return this.mimeType.startsWith('text/');
-  }
-
-  /**
-   * Supported output formats for this fragment type
-   */
-  get formats() {
-    if (this.mimeType === 'text/plain') return ['text/plain'];
-    return [this.mimeType];
-  }
-
-  /**
-   * Validate supported types
-   */
   static isSupportedType(value) {
     if (!value) return false;
     const { type } = contentType.parse(value);
-    const supported = ['text/plain']; // extend later
+    const supported = ['text/plain', 'text/markdown', 'application/json'];
     return supported.includes(type);
+  }
+
+  get type() {
+    return this._type;
+  }
+  set type(v) {
+    const norm = normalizeType(v);
+    if (!Fragment.isSupportedType(norm)) throw new Error(`Unsupported type: ${v}`);
+    this._type = norm;
+  }
+
+  get mimeType() {
+    return normalizeType(this.type);
+  }
+  get isText() {
+    return isText(this.mimeType);
+  }
+
+  toJSON() {
+    return {
+      id: this.id,
+      ownerId: this.ownerId, // already hashed
+      created: this.created.toISOString(),
+      updated: this.updated.toISOString(),
+      type: this.type,
+      size: this.size,
+    };
+  }
+
+  // IMPORTANT: your memory layer expects ONE argument: the serialized fragment
+  async save() {
+    this.updated = new Date();
+    await data.writeFragment(this.toJSON()); // ✅ one argument
+  }
+  async setData(value) {
+    let buf;
+
+    if (Buffer.isBuffer(value)) {
+      buf = value;
+    } else if (this.mimeType === 'application/json') {
+      // If the body was parsed to an object, serialize it properly
+      const jsonString = typeof value === 'string' ? value : JSON.stringify(value);
+      buf = Buffer.from(jsonString, 'utf-8');
+    } else {
+      // Text & others
+      buf = Buffer.from(String(value ?? ''), 'utf-8');
+    }
+
+    await data.writeFragmentData(this.ownerId, this.id, buf);
+    this.size = buf.length;
+    this.updated = new Date();
+    await data.writeFragment(this.toJSON());
+  }
+
+  async getData() {
+    return data.readFragmentData(this.ownerId, this.id);
+  }
+
+  // ------------------------------- Queries ----------------------------------
+
+  static async byId(ownerId, id) {
+    const meta = await data.readFragment(Fragment.ownerId(ownerId), id);
+    if (!meta) throw new Error('Fragment not found');
+    return new Fragment(meta);
+  }
+
+  static async byUser(ownerId, expand = false) {
+    const list = await data.listFragments(Fragment.ownerId(ownerId), expand);
+    // expand=false: array of ids; expand=true: array of metadata objects
+    return list;
+  }
+
+  static async delete(ownerId, id) {
+    if (typeof data.deleteFragment === 'function') {
+      await data.deleteFragment(Fragment.ownerId(ownerId), id);
+    }
   }
 }
 
-module.exports.Fragment = Fragment;
+module.exports = { Fragment, normalizeType };
+
+// // src/model/fragment.js
+
+// const crypto = require('crypto');
+// // const contentType = require('content-type');
+
+// // Use the data strategy wrapper so we can swap backends later (memory/AWS)
+// // If you don't have src/model/data/index.js, create it with:
+// //   module.exports = require('./memory');
+// const data = require('./data');
+
+// // ---------------------- Supported types & helpers ----------------------------
+
+// const contentType = require('content-type');
+
+// function normalizeType(value) {
+//   return String(value || '')
+//     .split(';')[0]
+//     .trim()
+//     .toLowerCase();
+// }
+
+// function isText(type) {
+//   return type.startsWith('text/');
+// }
+
+// // ------------------------------- Fragment -----------------------------------
+
+// class Fragment {
+//   /**
+//    * @param {Object} params
+//    * @param {string} params.ownerId
+//    * @param {string} params.type
+//    * @param {string} [params.id]
+//    * @param {Date|string} [params.created]
+//    * @param {Date|string} [params.updated]
+//    * @param {number} [params.size=0]
+//    */
+//   constructor({ ownerId, type, id, created, updated, size = 0 }) {
+//     if (!ownerId) throw new Error('ownerId is required');
+
+//     const norm = normalizeType(type);
+//     if (!Fragment.isSupportedType(norm)) {
+//       throw new Error(`Unsupported type: ${type}`);
+//     }
+
+//     this.ownerId = ownerId;
+//     this._type = norm;
+//     this.id = id || Fragment.id();
+//     this.created = created ? new Date(created) : new Date();
+//     this.updated = updated ? new Date(updated) : new Date();
+
+//     if (typeof size !== 'number' || size < 0) {
+//       throw new Error('size must be a non-negative number');
+//     }
+//     this.size = size;
+//   }
+
+//   static id() {
+//     return crypto.randomUUID();
+//   }
+//   static isSupportedType(value) {
+//     if (!value) return false;
+//     const { type } = contentType.parse(value);
+//     const supported = ['text/plain', 'text/markdown', 'application/json'];
+//     return supported.includes(type);
+//   }
+
+//   get type() {
+//     return this._type;
+//   }
+//   set type(v) {
+//     const norm = normalizeType(v);
+//     if (!Fragment.isSupportedType(norm)) throw new Error(`Unsupported type: ${v}`);
+//     this._type = norm;
+//   }
+
+//   get mimeType() {
+//     return normalizeType(this.type);
+//   }
+//   get isText() {
+//     return isText(this.mimeType);
+//   }
+
+//   toJSON() {
+//     return {
+//       id: this.id,
+//       ownerId: this.ownerId,
+//       created: this.created.toISOString(),
+//       updated: this.updated.toISOString(),
+//       type: this.type,
+//       size: this.size,
+//     };
+//   }
+
+//   // IMPORTANT: your memory layer expects ONE argument: the serialized fragment
+//   async save() {
+//     this.updated = new Date();
+//     await data.writeFragment(this.toJSON()); // ✅ one argument
+//   }
+
+//   async setData(value) {
+//     const buf = Buffer.isBuffer(value) ? value : Buffer.from(String(value) || '', 'utf-8');
+//     await data.writeFragmentData(this.ownerId, this.id, buf);
+//     this.size = buf.length;
+//     this.updated = new Date();
+//     await data.writeFragment(this.toJSON()); // ✅ one argument
+//   }
+
+//   async getData() {
+//     return data.readFragmentData(this.ownerId, this.id);
+//   }
+
+//   // ------------------------------- Queries ----------------------------------
+
+//   static async byId(ownerId, id) {
+//     const meta = await data.readFragment(ownerId, id);
+//     if (!meta) throw new Error('Fragment not found');
+//     return new Fragment(meta);
+//   }
+
+//   static async byUser(ownerId, expand = false) {
+//     const list = await data.listFragments(ownerId, expand);
+//     // Your memory layer returns:
+//     // - expand=false: array of ids
+//     // - expand=true: array of metadata objects
+//     return list;
+//   }
+
+//   static async delete(ownerId, id) {
+//     if (typeof data.deleteFragment === 'function') {
+//       await data.deleteFragment(ownerId, id);
+//     }
+//   }
+// }
+
+// module.exports = { Fragment, normalizeType };

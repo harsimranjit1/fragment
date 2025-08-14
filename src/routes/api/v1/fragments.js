@@ -1,44 +1,75 @@
 // src/routes/api/v1/fragments.js
-
 const express = require('express');
 const router = express.Router();
+const contentType = require('content-type');
+
 const { Fragment } = require('../../../model/fragment');
-const authenticate = require('../../../auth/auth-middleware'); // no args!
+const authenticate = require('../../../auth/auth-middleware');
 const { createSuccessResponse, createErrorResponse } = require('../../../response');
 const logger = require('../../../logger');
+const data = require('../../../model/data');
+const getConverted = require('./get-converted'); // ensure this file exists at v1/get-converted.js
+
+// Raw body parser so POST receives a Buffer for supported types
+const rawBody = () =>
+  express.raw({
+    inflate: true,
+    limit: '5mb',
+    type: (req) => {
+      try {
+        const { type } = contentType.parse(req);
+        return Fragment.isSupportedType(type);
+      } catch {
+        return false;
+      }
+    },
+  });
 
 /**
  * POST /v1/fragments
- * Creates a new fragment for the authenticated user.
+ * Creates a new fragment.
  */
-router.post('/', authenticate(), async (req, res) => {
+router.post('/', rawBody(), authenticate(), async (req, res) => {
   try {
-    const type = req.get('Content-Type');
-
-    if (!Fragment.isSupportedType(type)) {
+    const typeHeader = req.get('Content-Type');
+    if (!Fragment.isSupportedType(typeHeader)) {
       return res.status(415).json(createErrorResponse(415, 'Unsupported Content-Type'));
     }
 
-    // req.user is now the hashed email
-    const fragment = new Fragment({ ownerId: req.user, type, size: 0 });
+    const baseType = String(typeHeader).split(';')[0].trim().toLowerCase();
+    let buf;
+
+    if (Buffer.isBuffer(req.body)) {
+      buf = req.body;
+    } else if (baseType === 'application/json') {
+      buf = Buffer.from(
+        typeof req.body === 'object' && req.body !== null
+          ? JSON.stringify(req.body)
+          : String(req.body ?? ''),
+        'utf-8'
+      );
+    } else if (baseType.startsWith('text/')) {
+      buf = Buffer.from(String(req.body ?? ''), 'utf-8');
+    } else {
+      return res.status(415).json(createErrorResponse(415, 'Unsupported Content-Type'));
+    }
+
+    const fragment = new Fragment({ ownerId: req.user, type: typeHeader, size: 0 });
     await fragment.save();
+    await fragment.setData(buf);
 
-    const data = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body || '', 'utf-8');
-    await fragment.setData(data);
-
-    res
-      .status(201)
-      .location(`/v1/fragments/${fragment.id}`)
-      .json(createSuccessResponse({ fragment }));
+    const base = `${req.protocol}://${req.get('host')}`;
+    res.set('Location', `${base}/v1/fragments/${fragment.id}`);
+    return res.status(201).json(createSuccessResponse({ fragment }));
   } catch (err) {
     logger.error({ err }, 'Error creating fragment');
-    res.status(500).json(createErrorResponse(500, 'Error creating fragment'));
+    return res.status(500).json(createErrorResponse(500, 'Error creating fragment'));
   }
 });
 
 /**
  * GET /v1/fragments
- * Returns a list of fragment IDs (or full objects with ?expand=1).
+ * List fragments (ids or expanded).
  */
 router.get('/', authenticate(), async (req, res) => {
   try {
@@ -52,21 +83,75 @@ router.get('/', authenticate(), async (req, res) => {
 });
 
 /**
+ * GET /v1/fragments/:id/info  (MUST be before '/:id')
+ * Returns JSON metadata only.
+ */
+router.get('/:id/info', authenticate(), async (req, res) => {
+  try {
+    const fragment = await Fragment.byId(req.user, req.params.id);
+    if (!fragment) return res.status(404).json(createErrorResponse(404, 'Fragment not found'));
+    const meta = fragment.toJSON ? fragment.toJSON() : fragment;
+    res.status(200).json(createSuccessResponse({ fragment: meta }));
+  } catch (err) {
+    res.status(404).json(createErrorResponse(404, 'Fragment not found'));
+  }
+});
+
+/**
+ * GET /v1/fragments/:id.:ext  (MUST be before '/:id')
+ * Conversion handler (e.g., markdown -> html).
+ */
+router.get('/:id.:ext', authenticate(), getConverted);
+
+/**
  * GET /v1/fragments/:id
- * Returns an existing fragment's data.
+ * Return the RAW bytes with the fragment's Content-Type header.
  */
 router.get('/:id', authenticate(), async (req, res) => {
   try {
     const fragment = await Fragment.byId(req.user, req.params.id);
+    if (!fragment) return res.status(404).json(createErrorResponse(404, 'Fragment not found'));
+
+    const buf = await fragment.getData();
+    res.set('Content-Type', fragment.type);
+    return res.status(200).send(buf);
+  } catch (err) {
+    logger.error({ err }, 'Error retrieving fragment data');
+    return res.status(404).json(createErrorResponse(404, 'Fragment not found'));
+  }
+});
+
+/**
+ * DELETE /v1/fragments/:id
+ * Delete S3 object and metadata.
+ */
+router.delete('/:id', authenticate(), async (req, res, next) => {
+  try {
+    const ownerId = req.user;
+    const { id } = req.params;
+
+    const fragment = await Fragment.byId(ownerId, id);
     if (!fragment) {
       return res.status(404).json(createErrorResponse(404, 'Fragment not found'));
     }
-    const data = await fragment.getData();
-    res.setHeader('Content-Type', fragment.type);
-    res.status(200).send(data);
+
+    // delete data from S3 (best-effort)
+    try {
+      await data.deleteFragment(ownerId, id);
+    } catch (e) {
+      logger?.warn?.({ e, ownerId, id }, 'Non-fatal error deleting S3 object');
+    }
+
+    // delete metadata
+    if (typeof fragment.delete === 'function') {
+      await fragment.delete();
+    } else if (typeof Fragment.delete === 'function') {
+      await Fragment.delete(ownerId, id);
+    }
+
+    return res.status(200).json(createSuccessResponse({ fragmentId: id }));
   } catch (err) {
-    logger.error({ err }, 'Error retrieving fragment by ID');
-    res.status(404).json(createErrorResponse(404, err.message));
+    next(err);
   }
 });
 
