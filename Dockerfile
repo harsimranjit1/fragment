@@ -6,7 +6,7 @@ COPY package*.json ./
 RUN npm ci --omit=dev
 COPY ./src ./src
 # If you need tests/.htpasswd in the image for Basic Auth:
-COPY src/tests/.htpasswd /etc/httpd/.htpasswd
+COPY tests/.htpasswd /etc/httpd/.htpasswd
 ENV HTPASSWD_FILE=/etc/httpd/.htpasswd
 
 
