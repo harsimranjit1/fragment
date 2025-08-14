@@ -1,0 +1,35 @@
+{
+  "family": "fragments",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "runtimePlatform": { "operatingSystemFamily": "LINUX" },
+
+  "executionRoleArn": "arn:aws:iam::261441420205:role/LabRole",
+  "taskRoleArn": "arn:aws:iam::261441420205:role/LabRole",
+
+  "containerDefinitions": [
+    {
+      "name": "fragments",
+      "image": "public.ecr.aws/amazonlinux/amazonlinux:latest",
+      "essential": true,
+      "portMappings": [{ "containerPort": 8080, "protocol": "tcp" }],
+      "environment": [
+        { "name": "NODE_ENV", "value": "production" },
+        { "name": "LOG_LEVEL", "value": "info" },
+        { "name": "HTPASSWD_FILE", "value": "tests/.htpasswd" },
+        { "name": "AWS_S3_BUCKET_NAME", "value": "harimranjit-fragment" },
+        { "name": "AWS_REGION", "value": "us-east-1" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-region": "us-east-1",
+          "awslogs-group": "/ecs/fragments",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}
