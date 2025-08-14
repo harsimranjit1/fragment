@@ -37,7 +37,9 @@ jobs:
           node-version: '20'
           cache: 'npm'
       - run: npm ci
-      - run: npm test -- --ci --coverage --passWithNoTests
+      - run: npx jest -c jest.config.js --runInBand --ci --coverage --passWithNoTests
+
+      #- run: npm test -- --ci --coverage --passWithNoTests
   docker-hub:
     name: Build and Push to Docker Hub
     needs: [lint, dockerfile-lint, unit-tests]

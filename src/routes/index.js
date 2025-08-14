@@ -1,26 +1,33 @@
+// src/routes/index.js
 const express = require('express');
-const authenticate = require('../auth/auth-middleware');
-const { createSuccessResponse } = require('../response');
-const { hostname } = require('os');
-
 const router = express.Router();
+const { createSuccessResponse } = require('../response');
 
-// Protect everything under /v1 and mount ONE router
-router.use('/v1', authenticate(), require('./api'));
+// Load once per process (safe + fast)
+const pkg = require('../../package.json');
+
+// Normalize a GitHub URL from package.json
+// function getGithubUrl() {
+//   // Support either string or { url } forms
+//   if (typeof pkg.repository === 'string') return pkg.repository;
+//   if (pkg.repository && pkg.repository.url) return pkg.repository.url;
+//   // fallback to homepage if that’s your GitHub URL
+//   return pkg.homepage || '';
+// }
 
 // Health check
 router.get('/', (req, res) => {
-  res.setHeader('Cache-Control', 'no-cache');
+  res.set('Cache-Control', 'no-cache');
   res.status(200).json(
     createSuccessResponse({
-      // TODO: make sure these are changed for your name and repo
-      author: 'HARSIMRANJIT KAUR',
+      author: pkg.author, // e.g., "harsimranjit1"
       githubUrl: 'https://github.com/harsimranjit1/fragment',
-
-      // Include the hostname in the response
-      hostname: hostname(),
+      version: pkg.version, // e.g., "0.9.1"
     })
   );
 });
+
+// Mount your API routes (keep your existing structure)
+router.use('/v1', require('./api/v1'));
 
 module.exports = router;
